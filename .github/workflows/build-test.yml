@@ -1,0 +1,117 @@
+name: Build Test
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: '单个包名测试（留空则测试 SYNC_LIST 全部包）'
+        required: false
+        default: ''
+  push:
+    branches: [ main ]
+    paths:
+      - '**/Makefile'
+      - 'apk-compat-check.sh'
+
+env:
+  # ImmortalWrt 25.12 分支（apk 原生；若分支名变更请同步修改）
+  IMMORTALWRT_REPO: https://github.com/immortalwrt/immortalwrt.git
+  IMMORTALWRT_BRANCH: openwrt-25.12
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout Package Repo
+        uses: actions/checkout@v5
+        with:
+          path: wrtafterai-package
+
+      - name: Checkout ImmortalWrt
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.IMMORTALWRT_REPO }}
+          ref: ${{ env.IMMORTALWRT_BRANCH }}
+          path: openwrt
+          fetch-depth: 1
+
+      - name: Setup Build Environment
+        working-directory: openwrt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
+            python3-distutils rsync unzip zlib1g-dev file wget
+
+      - name: APK Audit (gate)
+        working-directory: wrtafterai-package
+        run: |
+          chmod +x apk-compat-check.sh
+          bash apk-compat-check.sh
+
+      - name: Add WrtAfterAI Feed
+        working-directory: openwrt
+        run: |
+          echo "src-link wrtafterai $GITHUB_WORKSPACE/wrtafterai-package" >> feeds.conf.default
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Configure Build
+        working-directory: openwrt
+        run: |
+          cat > .config << 'EOF'
+          CONFIG_TARGET_x86=y
+          CONFIG_TARGET_x86_64=y
+          CONFIG_USE_APK=y
+          CONFIG_DEVEL=y
+          CONFIG_BUILD_LOG=y
+          EOF
+
+          # 选择要编译的包：指定包名或 SYNC_LIST 全量
+          if [ -n "${{ github.event.inputs.package }}" ]; then
+            echo "CONFIG_PACKAGE_${{ github.event.inputs.package }}=y" >> .config
+          else
+            PKGS=$(grep -v '^#' ../wrtafterai-package/SYNC_LIST | grep -v '^$')
+            for pkg in $PKGS; do
+              echo "CONFIG_PACKAGE_$pkg=y" >> .config
+            done
+          fi
+
+          make defconfig
+
+      - name: Download Sources
+        working-directory: openwrt
+        run: make download -j$(nproc)
+
+      - name: Build Packages
+        working-directory: openwrt
+        run: |
+          # 逐包编译（package/index 只生成索引，不编译）
+          if [ -n "${{ github.event.inputs.package }}" ]; then
+            make "package/${{ github.event.inputs.package }}/compile" -j$(nproc) V=s
+          else
+            PKGS=$(grep -v '^#' ../wrtafterai-package/SYNC_LIST | grep -v '^$')
+            for pkg in $PKGS; do
+              echo "::group::Build $pkg"
+              make "package/$pkg/compile" -j$(nproc) V=s
+              echo "::endgroup::"
+            done
+          fi
+
+      - name: Upload Build Log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: openwrt/logs/
+          retention-days: 7
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "✅ Build passed (ImmortalWrt ${{ env.IMMORTALWRT_BRANCH }}, apk)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ Build failed - see workflow logs" >> "$GITHUB_STEP_SUMMARY"
+          fi

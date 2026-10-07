@@ -1,49 +1,50 @@
-# RClaw Package Repository
+# WrtAfterAI Package
 
-RClaw 固件的独立插件源仓库。
+WrtAfterAI 固件的插件仓库（feed），从 [kenzok8/small-package](https://github.com/kenzok8/small-package) 定期同步并做 apk 兼容治理。
 
-## 说明
+> **基座**: ImmortalWrt 25.12+（apk 原生包管理，opkg 已被上游移除）
+> **主页**: https://wrt.afterai.tech
 
-本仓库从 [kenzok8/small-package](https://github.com/kenzok8/small-package) fork，并根据 RClaw 项目需求进行定制。
+## 仓库结构
 
-## 当前收录插件
+| 文件 | 作用 |
+| --- | --- |
+| `SYNC_LIST` | 同步白名单（每行一个包名） |
+| `sync-from-upstream.sh` | 本地同步 + 清理 + 自动修复 + 审计 |
+| `apk-compat-check.sh` | apk 兼容审计（只读，CI 门禁） |
+| `apk-compat-fix.sh` | apk 兼容自动修复（默认 dry-run，`--apply` 写入） |
+| `.github/workflows/sync.yml` | 每周自动同步：同步 → 清理 → 修复 → 审计 → 提交 |
+| `.github/workflows/build-test.yml` | ImmortalWrt 25.12 逐包编译测试 |
 
-### 应用插件
+## apk 兼容规则速查
 
-| 插件 | 包名 | 说明 |
-|------|------|------|
-| Dockerman | luci-app-dockerman | Docker 可视化管理 |
-| Netdata | luci-app-netdata | 系统实时监控 |
-| OpenClash | luci-app-openclash | 代理客户端 |
-| SoftEtherVPN | luci-app-softethervpn | VPN 服务器 |
-| vlmcsd | luci-app-vlmcsd | KMS 激活服务 |
-| xunlei | luci-app-xunlei | 远程下载 |
+| opkg | apk |
+| --- | --- |
+| `opkg install` | `apk add` |
+| `opkg remove` | `apk del` |
+| `opkg update` | `apk update` |
+| `/etc/opkg/distfeeds.conf` | `/etc/apk/repositories.d/distfeeds.list` |
+| `/etc/opkg/customfeeds.conf` | `/etc/apk/repositories.d/customfeeds.list` |
+| `/var/lib/opkg`、`/usr/lib/opkg` | `/lib/apk/db` |
+| conffiles | `/etc/apk/protected_paths.d/` |
+| `.ipk` | `.apk` |
 
-### 主题
+官方对照表：[opkg-to-apk cheatsheet](https://openwrt.org/docs/guide-user/additional-software/opkg-to-apk-cheatsheet)
 
-| 主题 | 包名 | 说明 |
-|------|------|------|
-| Glass | luci-theme-glass | 简洁玻璃风格主题 |
-
-## 使用方法
-
-在 OpenWrt 源码的 `feeds.conf` 中添加：
-
-```
-src-git rclaw https://github.com/gitHardie/rclaw-package.git
-```
-
-然后执行：
+## 本地使用
 
 ```bash
-./scripts/feeds update -a
-./scripts/feeds install -a
+# 同步并体检（修复为 dry-run 预览）
+./sync-from-upstream.sh
+
+# 确认后写入修复
+./sync-from-upstream.sh --apply
+
+# 单独审计
+bash apk-compat-check.sh
 ```
 
-## 更新策略
+## 变更记录
 
-本仓库会定期从上游 kenzok8/small-package 同步更新，同时保留 RClaw 项目的定制修改。
-
-## 许可证
-
-遵循各插件原有开源协议。
+- 2026-10-07：移除 `luci-app-xunlei`（闭源 binary 无维护，25.12/apk 下无法可靠适配）
+- 2026-10-07：项目由 rclaw 改名 wrtafterai，引入 apk 兼容审计/修复流水线

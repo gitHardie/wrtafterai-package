@@ -1,5 +1,9 @@
-# RClaw Package 同步配置
-# 记录从 kenzok8/small-package 同步时需要保留的插件列表
+# WrtAfterAI Package 同步配置
+# 从 kenzok8/small-package 同步的插件列表（每周自动同步）
+#
+# 变更记录：
+# - 2026-10-07 移除 luci-app-xunlei（闭源 binary 无维护，ImmortalWrt 25.12/apk 下无法可靠适配）
+# - 2026-10-07 项目由 rclaw 改名 wrtafterai，基座迁移至 ImmortalWrt 25.12（apk 原生）
 
 # 应用插件
 luci-app-dockerman
@@ -7,17 +11,8 @@ luci-app-netdata
 luci-app-openclash
 luci-app-softethervpn
 luci-app-vlmcsd
-luci-app-xunlei
 
 # 主题
 luci-theme-glass
 
-# 依赖包（根据插件需要自动同步）
-# 这些包会在同步时从上游一起拉取
-# dockerd
-# docker-ce
-# netdata
-# xray-core
-# clash
-# softethervpn
-# vlmcsd
+# 依赖包（按插件需要自动同步，不单独列出）

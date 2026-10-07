@@ -1,12 +1,13 @@
 name: Sync from Upstream
-
 on:
   schedule:
+    # 每周一 UTC 3:00（北京时间 11:00）同步
     - cron: '0 3 * * 1'
   workflow_dispatch:
 
 permissions:
   contents: write
+  issues: write
 
 env:
   UPSTREAM_REPO: https://github.com/kenzok8/small-package.git
@@ -15,7 +16,6 @@ env:
 jobs:
   sync:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -40,62 +40,100 @@ jobs:
         shell: bash
         run: |
           PACKAGES="${{ steps.sync_list.outputs.packages }}"
-
           for pkg in $PACKAGES; do
             src="upstream/$pkg"
             dst="$pkg"
-
             if [ -d "$src" ]; then
               echo "Syncing: $pkg"
               rm -rf "$dst"
               cp -r "$src" "$dst"
             else
-              echo "Skip: $pkg (not found in upstream)"
+              echo "WARN: $pkg not found in upstream"
             fi
           done
-
           rm -rf upstream
+
+      - name: Prune Removed Packages
+        shell: bash
+        run: |
+          # 删除仓库中已不在 SYNC_LIST 的包目录（如已移除的 luci-app-xunlei）
+          KEEP="SYNC_LIST:README.md:apk-compat-check.sh:apk-compat-fix.sh:sync-from-upstream.sh:.gitignore:.github:.apk-whitelist"
+          removed=0
+          for d in */; do
+            pkg="${d%/}"
+            if ! grep -qx "$pkg" SYNC_LIST; then
+              echo "Prune removed package: $pkg"
+              rm -rf "$pkg"
+              removed=$((removed+1))
+            fi
+          done
+          echo "Pruned: $removed package(s)"
+
+      - name: APK Auto Fix (apply)
+        shell: bash
+        run: |
+          chmod +x apk-compat-fix.sh
+          bash apk-compat-fix.sh --apply
+
+      - name: APK Audit (gate)
+        id: audit
+        shell: bash
+        run: |
+          chmod +x apk-compat-check.sh
+          bash apk-compat-check.sh | tee audit-report.txt
+          exit "${PIPESTATUS[0]}"
 
       - name: Check for Changes
         id: check_changes
+        if: always()
         shell: bash
         run: |
           if [ -n "$(git status --porcelain)" ]; then
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
-            echo "Changes detected:"
             git status --short
           else
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
-            echo "No changes detected"
           fi
 
       - name: Commit and Push
-        if: steps.check_changes.outputs.has_changes == 'true'
+        if: steps.check_changes.outputs.has_changes == 'true' && steps.audit.outcome == 'success'
         shell: bash
         run: |
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-
           DATE=$(date +%Y-%m-%d)
-
           git add -A
-          git commit -m "Sync from upstream $DATE" -m "Auto-synced packages from kenzok8/small-package"
+          git commit -m "Sync from upstream $DATE + apk adapt" \
+                     -m "Auto-synced packages, applied apk compatibility fixes, audit passed"
           git push origin "HEAD:${{ github.event.repository.default_branch }}"
 
-      - name: Create Summary
+      - name: Create Issue on Audit Failure
+        if: steps.audit.outcome == 'failure'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `apk 兼容审计未通过 - ${new Date().toISOString().slice(0,10)}`,
+              body: '同步或自动修复后审计仍有 ERROR 级问题，请查看 workflow 日志与 audit-report.txt 产物。'
+            })
+
+      - name: Upload Audit Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-report
+          path: audit-report.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Summary
         if: always()
         shell: bash
         run: |
           echo "## Sync Summary" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "${{ steps.check_changes.outputs.has_changes }}" == "true" ]; then
-            echo "✅ Changes detected and pushed" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "Updated packages:" >> "$GITHUB_STEP_SUMMARY"
-            git diff --name-only HEAD~1 | head -20 | while read -r f; do
-              echo "- $f" >> "$GITHUB_STEP_SUMMARY"
-            done
-          else
-            echo "ℹ️ No changes from upstream" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          echo "- Packages: ${{ steps.sync_list.outputs.packages }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Changes: ${{ steps.check_changes.outputs.has_changes }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- APK audit: ${{ steps.audit.outcome }}" >> "$GITHUB_STEP_SUMMARY"
