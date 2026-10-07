@@ -46,5 +46,6 @@ bash apk-compat-check.sh
 
 ## 变更记录
 
+- 2026-10-07：新增自有包 `wrtafterai-mcp` v0.1.0（M0：12 只读工具 + token 管理 + 一键 setup/tunnel/doctor）
 - 2026-10-07：移除 `luci-app-xunlei`（闭源 binary 无维护，25.12/apk 下无法可靠适配）
 - 2026-10-07：项目由 rclaw 改名 wrtafterai，引入 apk 兼容审计/修复流水线

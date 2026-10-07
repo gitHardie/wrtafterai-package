@@ -1,0 +1,56 @@
+#!/bin/sh
+# WrtAfterAI MCP 首启一键配置：
+#   1. server 段默认值
+#   2. 局域网域名解析 wrt.afterai -> LAN IP（dnsmasq address）
+#   3. 无 token 时生成初始管理 token（write），写入 /root/wrtafterai-mcp-token.txt
+
+WRT_DOMAIN=wrt.afterai
+
+# 1) server 段
+uci -q get wrtafterai-mcp.server >/dev/null 2>&1 || {
+	uci set wrtafterai-mcp.server=server
+	uci set wrtafterai-mcp.server.enabled='1'
+	uci set wrtafterai-mcp.server.listen='0.0.0.0:8443'
+	uci set wrtafterai-mcp.server.domain="$WRT_DOMAIN"
+	uci set wrtafterai-mcp.server.tls='0'
+	uci set wrtafterai-mcp.server.audit='1'
+}
+
+# 2) 域名解析（含裸域 wrt，方便客户端输入）
+LAN_IP="$(ubus -S call network.interface.lan status 2>/dev/null | jsonfilter -e '@.ipv4-address[0].address' 2>/dev/null)"
+if [ -n "$LAN_IP" ]; then
+	for d in "$WRT_DOMAIN" wrt; do
+		uci -q del_list dhcp.@dnsmasq[0].address="/${d}/${LAN_IP}"
+		uci add_list dhcp.@dnsmasq[0].address="/${d}/${LAN_IP}"
+	done
+fi
+
+# 3) 初始 token（仅当不存在任何 token 段时）
+if ! uci -q show wrtafterai-mcp 2>/dev/null | grep -q '=token$'; then
+	KEY="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+	if [ -z "$KEY" ] && command -v openssl >/dev/null 2>&1; then
+		KEY="$(openssl rand -hex 32)"
+	fi
+	if [ -n "$KEY" ]; then
+		uci set wrtafterai-mcp.admin=token
+		uci set wrtafterai-mcp.admin.key="$KEY"
+		uci set wrtafterai-mcp.admin.level='write'
+		(
+			umask 077
+			{
+				echo "WrtAfterAI MCP 初始管理 token（level=write）"
+				echo "$KEY"
+				echo ""
+				echo "在 Coze / WorkBuddy 的 MCP 配置中填入该密钥即可接入。"
+				echo "吊销: wrtafterai-mcp token revoke admin"
+				echo "新增: wrtafterai-mcp token add <name> <readonly|write>"
+			} > /root/wrtafterai-mcp-token.txt
+		)
+	fi
+fi
+
+uci commit wrtafterai-mcp
+uci commit dhcp
+[ -n "$LAN_IP" ] && /etc/init.d/dnsmasq restart >/dev/null 2>&1
+
+exit 0
